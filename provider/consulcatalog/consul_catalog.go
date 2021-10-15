@@ -32,6 +32,7 @@ type Provider struct {
 	Endpoint              string           `description:"Consul server endpoint"`
 	Domain                string           `description:"Default domain used"`
 	Stale                 bool             `description:"Use stale consistency for catalog reads" export:"true"`
+	Cache                 bool             `description:"Use cached reads for health status reads" export:"true"`
 	ExposedByDefault      bool             `description:"Expose Consul services by default" export:"true"`
 	Prefix                string           `description:"Prefix used for Consul catalog tags" export:"true"`
 	StrictChecks          bool             `description:"Keep a Consul node only if all checks status are passing" export:"true"`
@@ -207,6 +208,9 @@ func (p *Provider) watchCatalogServices(stopCh <-chan struct{}, watchCh chan<- m
 		// variable to hold previous state
 		var flashback map[string]Service
 
+	    // DO NOT use cache here!  It can potentially give you very old data, see
+		// https://www.consul.io/api/features/caching for simple vs. background.
+		// The service API uses simple caching.
 		options := &api.QueryOptions{WaitTime: DefaultWatchWaitTime, AllowStale: p.Stale, Filter: p.Filter}
 
 		for {
@@ -510,7 +514,7 @@ func getServiceAddresses(services []*api.CatalogService) []string {
 func (p *Provider) healthyNodes(service string) (catalogUpdate, error) {
 	health := p.client.Health()
 	// You can't filter with assigning passingOnly here, nodeFilter will do this later
-	data, _, err := health.Service(service, "", false, &api.QueryOptions{AllowStale: p.Stale})
+	data, _, err := health.Service(service, "", false, &api.QueryOptions{AllowStale: p.Stale, UseCache: p.Cache})
 	if err != nil {
 		log.WithError(err).Errorf("Failed to fetch details of %s", service)
 		return catalogUpdate{}, err

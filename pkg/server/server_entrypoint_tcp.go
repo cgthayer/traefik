@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/containous/alice"
+	gokitmetrics "github.com/go-kit/kit/metrics"
 	"github.com/pires/go-proxyproto"
 	"github.com/sirupsen/logrus"
 	"github.com/traefik/traefik/v2/pkg/config/static"
@@ -128,12 +129,14 @@ type TCPEntryPoint struct {
 	tracker                *connectionTracker
 	httpServer             *httpServer
 	httpsServer            *httpServer
-
-	http3Server *http3server
+	http3Server            *http3server
+	openSocketsGauge       gokitmetrics.Gauge
 }
 
 // NewTCPEntryPoint creates a new TCPEntryPoint.
 func NewTCPEntryPoint(ctx context.Context, configuration *static.EntryPoint, hostResolverConfig *types.HostResolverConfig) (*TCPEntryPoint, error) {
+	gauge := &gokitmetrics.Gauge{}
+	gauge.Set(0)
 	tracker := newConnectionTracker()
 
 	listener, err := buildListener(ctx, configuration)
@@ -207,6 +210,9 @@ func (e *TCPEntryPoint) Start(ctx context.Context) {
 		if err != nil {
 			panic(err)
 		}
+
+		// XXX
+		e.openSocketsGauge.Add(1)
 
 		safe.Go(func() {
 			// Enforce read/write deadlines at the connection level,
@@ -430,15 +436,17 @@ func buildListener(ctx context.Context, entryPoint *static.EntryPoint) (net.List
 	return listener, nil
 }
 
-func newConnectionTracker() *connectionTracker {
+func newConnectionTracker(gauge gokitmetrics.Gauge) *connectionTracker {
 	return &connectionTracker{
 		conns: make(map[net.Conn]struct{}),
+		gauge: gauge
 	}
 }
 
 type connectionTracker struct {
 	conns map[net.Conn]struct{}
 	lock  sync.RWMutex
+	gauge gokitmetrics.Gauge
 }
 
 // AddConnection add a connection in the tracked connections list.
@@ -485,6 +493,7 @@ func (c *connectionTracker) Close() {
 		if err := conn.Close(); err != nil {
 			log.WithoutContext().Errorf("Error while closing connection: %v", err)
 		}
+
 		delete(c.conns, conn)
 	}
 }

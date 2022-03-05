@@ -64,7 +64,7 @@ func (h *httpForwarder) Accept() (net.Conn, error) {
 type TCPEntryPoints map[string]*TCPEntryPoint
 
 // NewTCPEntryPoints creates a new TCPEntryPoints.
-func NewTCPEntryPoints(entryPointsConfig static.EntryPoints, hostResolverConfig *types.HostResolverConfig) (TCPEntryPoints, error) {
+func NewTCPEntryPoints(entryPointsConfig static.EntryPoints, hostResolverConfig *types.HostResolverConfig, openSocketsGauge *gokitmetrics.Gauge) (TCPEntryPoints, error) {
 	serverEntryPointsTCP := make(TCPEntryPoints)
 	for entryPointName, config := range entryPointsConfig {
 		protocol, err := config.GetProtocol()
@@ -78,7 +78,7 @@ func NewTCPEntryPoints(entryPointsConfig static.EntryPoints, hostResolverConfig 
 
 		ctx := log.With(context.Background(), log.Str(log.EntryPointName, entryPointName))
 
-		serverEntryPointsTCP[entryPointName], err = NewTCPEntryPoint(ctx, config, hostResolverConfig)
+		serverEntryPointsTCP[entryPointName], err = NewTCPEntryPoint(ctx, config, hostResolverConfig, openSocketsGauge)
 		if err != nil {
 			return nil, fmt.Errorf("error while building entryPoint %s: %w", entryPointName, err)
 		}
@@ -130,14 +130,13 @@ type TCPEntryPoint struct {
 	httpServer             *httpServer
 	httpsServer            *httpServer
 	http3Server            *http3server
-	openSocketsGauge       gokitmetrics.Gauge
+	openSocketsGauge       *gokitmetrics.Gauge
 }
 
 // NewTCPEntryPoint creates a new TCPEntryPoint.
-func NewTCPEntryPoint(ctx context.Context, configuration *static.EntryPoint, hostResolverConfig *types.HostResolverConfig) (*TCPEntryPoint, error) {
-	gauge := &gokitmetrics.Gauge{}
-	gauge.Set(0)
-	tracker := newConnectionTracker()
+func NewTCPEntryPoint(ctx context.Context, configuration *static.EntryPoint, hostResolverConfig *types.HostResolverConfig, openSocketsGauge *gokitmetrics.Gauge) (*TCPEntryPoint, error) {
+	// openSocketsGauge := new(gokitmetrics.Gauge)
+	tracker := newConnectionTracker(openSocketsGauge)
 
 	listener, err := buildListener(ctx, configuration)
 	if err != nil {
@@ -170,7 +169,7 @@ func NewTCPEntryPoint(ctx context.Context, configuration *static.EntryPoint, hos
 	tcpSwitcher := &tcp.HandlerSwitcher{}
 	tcpSwitcher.Switch(rt)
 
-	return &TCPEntryPoint{
+	e := &TCPEntryPoint{
 		listener:               listener,
 		switcher:               tcpSwitcher,
 		transportConfiguration: configuration.Transport,
@@ -178,7 +177,9 @@ func NewTCPEntryPoint(ctx context.Context, configuration *static.EntryPoint, hos
 		httpServer:             httpServer,
 		httpsServer:            httpsServer,
 		http3Server:            h3Server,
-	}, nil
+		openSocketsGauge:       openSocketsGauge,
+	}
+	return e, nil
 }
 
 // Start starts the TCP server.
@@ -206,13 +207,15 @@ func (e *TCPEntryPoint) Start(ctx context.Context) {
 			return
 		}
 
+		// XXX
+		if e.openSocketsGauge != nil {
+			(*e.openSocketsGauge).Add(1)
+		}
+
 		writeCloser, err := writeCloser(conn)
 		if err != nil {
 			panic(err)
 		}
-
-		// XXX
-		e.openSocketsGauge.Add(1)
 
 		safe.Go(func() {
 			// Enforce read/write deadlines at the connection level,
@@ -270,6 +273,9 @@ func (e *TCPEntryPoint) Shutdown(ctx context.Context) {
 		// We expect Close to fail again because Shutdown most likely failed when trying to close a listener.
 		// We still call it however, to make sure that all connections get closed as well.
 		server.Close()
+		if e.openSocketsGauge != nil {
+			(*e.openSocketsGauge).Add(-1)
+		}
 	}
 
 	if e.httpServer.Server != nil {
@@ -436,17 +442,17 @@ func buildListener(ctx context.Context, entryPoint *static.EntryPoint) (net.List
 	return listener, nil
 }
 
-func newConnectionTracker(gauge gokitmetrics.Gauge) *connectionTracker {
+func newConnectionTracker(openSocketsGauge *gokitmetrics.Gauge) *connectionTracker {
 	return &connectionTracker{
-		conns: make(map[net.Conn]struct{}),
-		gauge: gauge
+		conns:            make(map[net.Conn]struct{}),
+		openSocketsGauge: openSocketsGauge,
 	}
 }
 
 type connectionTracker struct {
-	conns map[net.Conn]struct{}
-	lock  sync.RWMutex
-	gauge gokitmetrics.Gauge
+	conns            map[net.Conn]struct{}
+	lock             sync.RWMutex
+	openSocketsGauge *gokitmetrics.Gauge
 }
 
 // AddConnection add a connection in the tracked connections list.

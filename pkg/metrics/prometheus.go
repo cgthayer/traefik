@@ -29,6 +29,7 @@ const (
 	configReloadsFailuresTotalName = metricConfigPrefix + "reloads_failure_total"
 	configLastReloadSuccessName    = metricConfigPrefix + "last_reload_success"
 	configLastReloadFailureName    = metricConfigPrefix + "last_reload_failure"
+	openSocketsName                = metricConfigPrefix + "open_sockets_name"
 
 	// TLS.
 	metricsTLSPrefix          = MetricNamePrefix + "tls_"
@@ -135,6 +136,10 @@ func initStandardRegistry(config *types.Prometheus) Registry {
 		Name: tlsCertsNotAfterTimestamp,
 		Help: "Certificate expiration timestamp",
 	}, []string{"cn", "serial", "sans"})
+	openSockets := newGaugeFrom(promState.collectors, stdprometheus.GaugeOpts{
+		Name: openSocketsName,
+		Help: "Open Sockets (connections)",
+	}, []string{})
 
 	promState.describers = []func(chan<- *stdprometheus.Desc){
 		configReloads.cv.Describe,
@@ -142,6 +147,7 @@ func initStandardRegistry(config *types.Prometheus) Registry {
 		lastConfigReloadSuccess.gv.Describe,
 		lastConfigReloadFailure.gv.Describe,
 		tlsCertsNotAfterTimestamp.gv.Describe,
+		openSockets.Describe,
 	}
 
 	reg := &standardRegistry{
@@ -153,6 +159,7 @@ func initStandardRegistry(config *types.Prometheus) Registry {
 		lastConfigReloadSuccessGauge:   lastConfigReloadSuccess,
 		lastConfigReloadFailureGauge:   lastConfigReloadFailure,
 		tlsCertsNotAfterTimestampGauge: tlsCertsNotAfterTimestamp,
+		openSocketsGauge:               openSockets,
 	}
 
 	if config.AddEntryPointsLabels {

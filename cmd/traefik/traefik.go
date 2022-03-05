@@ -189,8 +189,9 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 	acmeProviders := initACMEProvider(staticConfiguration, &providerAggregator, tlsManager, httpChallengeProvider, tlsChallengeProvider)
 
 	// Entrypoints
+	metricRegistries := registerMetricClients(staticConfiguration.Metrics) // to be used for openSockets
 
-	serverEntryPointsTCP, err := server.NewTCPEntryPoints(staticConfiguration.EntryPoints, staticConfiguration.HostResolver)
+	serverEntryPointsTCP, err := server.NewTCPEntryPoints(staticConfiguration.EntryPoints, staticConfiguration.HostResolver, &metricsRegistries.openSocketsGauge)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +242,6 @@ func setupServer(staticConfiguration *static.Configuration) (*server.Server, err
 
 	// Metrics
 
-	metricRegistries := registerMetricClients(staticConfiguration.Metrics)
 	if pilotRegistry != nil {
 		metricRegistries = append(metricRegistries, pilotRegistry)
 	}
